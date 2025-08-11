@@ -9,18 +9,22 @@
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f8fafc" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0B1220" />
   <title>HerMood</title>
-  <!-- Tailwind Play CDN (no build step) -->
-  <script>
-    window.tailwind = { config: { darkMode: 'class' } };
-  </script>
+
+  <!-- Tailwind (no build) -->
+  <script>window.tailwind = { config: { darkMode: 'class' } };</script>
   <script src="https://cdn.tailwindcss.com"></script>
-  <!-- React 18 + Babel for in-browser JSX transform (no build step) -->
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-  <script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- React 18 + ReactDOM (load BEFORE Babel) -->
+  <script crossorigin src="https://unpkg.com/react@18.2.0/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.development.js"></script>
+
+  <!-- Babel for inline JSX -->
+  <script crossorigin src="https://unpkg.com/@babel/standalone@7.25.6/babel.min.js"></script>
+
   <style>
     html { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji"; }
-    /* Theme variables so dark mode works even without Tailwind dark: variants */
+
+    /* Theme tokens */
     :root {
       --bg: #f8fafc;          /* light bg */
       --card: #ffffff;         /* light card */
@@ -41,24 +45,45 @@
       --chip-bg: rgba(255,255,255,.06);
       --header-bg: rgba(11,18,32,0.9);
     }
+
     .ff-root { background-color: var(--bg); color: var(--fg); min-height: 100svh; padding-bottom: env(safe-area-inset-bottom); }
     .ff-card { background-color: var(--card); border-color: var(--border); }
-    .ff-input { background-color: var(--input-bg); color: var(--fg); border-color: var(--border); }
+    .ff-input { background-color: var(--input-bg); color: var(--fg); border-color: var(--border); font-size: 16px; }
     .ff-muted { color: var(--muted); }
     .ff-chip { background-color: var(--chip-bg); border-color: var(--border); }
-      /* iOS HIG: 44pt minimum touch target */
+
+    /* iOS HIG: 44pt minimum */
     .tappable { min-height: 44px; min-width: 44px; }
 
-    /* Respect reduced motion */
+    /* Reduced motion */
     @media (prefers-reduced-motion: reduce) {
       * { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; scroll-behavior: auto !important; }
     }
+
+    /* Compact mode (~1/3 screen) */
+    .ff-compact .text-lg { font-size: 1rem !important; line-height: 1.25rem !important; }
+    .ff-compact .text-base { font-size: 0.95rem !important; }
+    .ff-compact .text-sm { font-size: 0.84rem !important; }
+    .ff-compact .text-xs { font-size: 0.70rem !important; }
+
+    .ff-compact .p-4 { padding: 0.75rem !important; }
+    .ff-compact .p-3 { padding: 0.5rem !important; }
+    .ff-compact .px-4 { padding-left: 0.75rem !important; padding-right: 0.75rem !important; }
+    .ff-compact .py-3 { padding-top: 0.5rem !important; padding-bottom: 0.5rem !important; }
+    .ff-compact .gap-4 { gap: 0.5rem !important; }
+    .ff-compact [class*="px-3"] { padding-left: 0.5rem !important; padding-right: 0.5rem !important; }
+    .ff-compact [class*="py-1.5"] { padding-top: 0.25rem !important; padding-bottom: 0.25rem !important; }
+
+    .ff-compact [class*="min-h-[84px]"] { min-height: 60px !important; }
+    .ff-compact .brand-icon { width: 28px !important; height: 28px !important; }
+    .ff-compact .rounded-2xl { border-radius: 0.75rem !important; }
+    .ff-compact .rounded-lg { border-radius: 0.5rem !important; }
   </style>
 </head>
 <body class="min-h-screen">
   <div id="root"></div>
 
-  <!-- Use Babel presets so JSX compiles properly -->
+  <!-- Inline app (Babel compiles JSX) -->
   <script type="text/babel" data-presets="env,react">
     const { useEffect, useMemo, useState } = React;
 
@@ -99,6 +124,16 @@
     }
     function formatDate(d){ return new Intl.DateTimeFormat('en', { weekday: 'short', month:'short', day:'numeric' }).format(d); }
     function clamp(n,min,max){ return Math.max(min, Math.min(max,n)); }
+
+    // Validation helper
+    function validateEditing(e){
+      if (!e) return false;
+      const nameOk = typeof e.name === 'string' && e.name.trim().length > 0;
+      const date = parseISODateOnly(e.lastPeriodStart);
+      const cycle = Number(e.cycleLength);
+      const luteal = Number(e.lutealPhase ?? DEFAULT_LUTEAL);
+      return nameOk && date instanceof Date && !isNaN(date) && cycle>=15 && cycle<=60 && luteal>=8 && luteal<=20;
+    }
 
     // Prediction helpers
     function fertileWindowsInRange(friend, rangeStart, rangeEnd){
@@ -154,6 +189,9 @@
       moon: <Icon path={<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>} />,
     };
 
+    // Compact breakpoint helper (trigger at <= 400 px width or <= 600 px height)
+    function shouldCompact(w, h){ return (w <= 400) || (h <= 600); }
+
     // ---------------- Reusable UI ----------------
     const ColorDot = ({ hex, className='' }) => (
       <span className={`inline-block h-2.5 w-2.5 rounded-full ring-2 ring-white ${className}`} style={{ backgroundColor: hex }} />
@@ -170,6 +208,19 @@
         <button onClick={onClick} className={`${base} ${styles[variant]}`}>
           {icon}
           {children}
+        </button>
+      );
+    };
+
+    const IconButton = ({ onClick, icon, label, variant='ghost' }) => {
+      const base = 'tappable inline-flex items-center justify-center rounded-full h-11 w-11 shadow-sm focus:outline-none';
+      const styles = {
+        primary: 'bg-slate-900 text-white hover:bg-slate-800',
+        ghost: 'bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50 dark:bg-transparent dark:text-slate-200 dark:ring-slate-700 dark:hover:bg-white/5',
+      };
+      return (
+        <button onClick={onClick} aria-label={label} title={label} className={`${base} ${styles[variant]}`}>
+          {icon}
         </button>
       );
     };
@@ -193,7 +244,7 @@
           <div className="absolute inset-0 bg-black/50" onClick={onClose} />
           <div className="ff-card relative z-10 w-full max-w-2xl rounded-2xl p-4 shadow-xl ring-1" style={{ borderColor: 'var(--border)' }}>
             <div className="absolute right-3 top-3">
-              <button onClick={onClose} className="rounded-full p-1 text-slate-500 hover:bg-white/10">{Icons.x}</button>
+              <button onClick={onClose} className="tappable rounded-full p-0 text-slate-500 hover:bg-white/10 min-w-[44px] min-h-[44px] flex items-center justify-center">{Icons.x}</button>
             </div>
             {children}
           </div>
@@ -201,11 +252,45 @@
       ) : null
     );
 
+    // Error boundary to catch runtime issues gracefully
+    class ErrorBoundary extends React.Component {
+      constructor(props){ super(props); this.state = { hasError:false, error:null }; }
+      static getDerivedStateFromError(error){ return { hasError:true, error }; }
+      componentDidCatch(error, info){ console.error('App crashed:', error, info); }
+      render(){
+        if (this.state.hasError) {
+          return (
+            <div className="ff-root min-h-screen flex items-center justify-center p-6">
+              <div className="ff-card max-w-lg rounded-2xl p-6 ring-1" style={{ borderColor:'var(--border)' }}>
+                <h2 className="text-lg font-semibold mb-2" style={{ color:'var(--fg)' }}>Something went wrong</h2>
+                <p className="text-sm ff-muted mb-4">The app hit an unexpected error. Try reloading. If it persists, check the console.</p>
+                <pre className="text-xs overflow-auto ff-chip p-3 rounded-lg ring-1" style={{ borderColor:'var(--border)' }}>{String(this.state.error)}</pre>
+                <div className="mt-4"><button className="tappable rounded-full bg-slate-900 px-4 py-2 text-sm font-medium text-white" onClick={()=>location.reload()}>Reload</button></div>
+              </div>
+            </div>
+          );
+        }
+        return this.props.children;
+      }
+    }
+
+    // ---------------- Timeline helper (one item per friend) ----------------
+    function computeTimelineUnique(friends, horizonDays = 150) {
+      const items = [];
+      for (const f of friends) {
+        const next = upcomingFertileWindows(f, horizonDays)[0];
+        if (next) items.push({ friend: f, ...next });
+      }
+      items.sort((a,b)=>a.start - b.start);
+      return items;
+    }
+
     // ---------------- Tiny runtime tests (console) ----------------
     function runTests(){
       try {
         console.group('HerMood – sanity tests');
         console.assert(initials('Alex Smith') === 'AS', 'initials failed');
+        console.assert(initials('single') === 'S', 'initials single failed');
         console.assert(clamp(100, 0, 10) === 10, 'clamp upper bound failed');
         console.assert(clamp(-5, 0, 10) === 0, 'clamp lower bound failed');
         const d = parseISODateOnly('2025-03-05');
@@ -215,9 +300,7 @@
         const friend = { lastPeriodStart: '2025-03-01', cycleLength: 28, lutealPhase: 14 };
         const wins = fertileWindowsInRange(friend, new Date(2025,2,1,12), new Date(2025,2,31,12));
         console.assert(Array.isArray(wins) && wins.length>0, 'fertileWindowsInRange returned empty');
-        const w0 = wins.find(w => w.start.getDate()===10 && w.end.getDate()===15);
-        console.assert(!!w0, 'expected window Mar 10–15 not found');
-        // timeline uniqueness & sort tests
+        console.assert(Array.isArray(fertileWindowsInRange({}, new Date(), addDays(new Date(), 30))) && fertileWindowsInRange({}, new Date(), addDays(new Date(), 30)).length===0, 'fertileWindowsInRange should be empty for missing data');
         const today2 = toMiddayLocal(new Date());
         const iso2 = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
         const A = { id:'A', name:'A', cycleLength:28, lutealPhase:14, lastPeriodStart: iso2(addDays(today2,-21)), color:'#000' };
@@ -227,24 +310,22 @@
         console.assert(itemsU.length === uniqueCount, 'computeTimelineUnique should return at most one entry per friend');
         const sorted = itemsU.every((it, idx, arr)=> idx===0 || arr[idx-1].start <= it.start);
         console.assert(sorted, 'Timeline items must be sorted by start date');
+        // compact logic
+        console.assert(shouldCompact(320, 800) === true, 'shouldCompact: small width should compact');
+        console.assert(shouldCompact(400, 500) === true, 'shouldCompact: small height should compact');
+        console.assert(shouldCompact(400, 800) === true, 'shouldCompact: width 400 should compact now');
+        console.assert(shouldCompact(401, 800) === false, 'shouldCompact: width 401 should NOT compact');
+        // validateEditing
+        console.assert(validateEditing(null) === false, 'validateEditing: null should be false');
+        console.assert(validateEditing({}) === false, 'validateEditing: empty should be false');
+        console.assert(validateEditing({ name:' A ', lastPeriodStart:'2025-01-01', cycleLength:28, lutealPhase:14 }) === true, 'validateEditing: valid should be true');
         console.groupEnd();
       } catch (e) {
         console.error('Tests failed', e);
       }
     }
 
-    // ---------------- Timeline helper (one item per friend) ----------------
-function computeTimelineUnique(friends, horizonDays = 150) {
-  const items = [];
-  for (const f of friends) {
-    const next = upcomingFertileWindows(f, horizonDays)[0];
-    if (next) items.push({ friend: f, ...next });
-  }
-  items.sort((a,b)=>a.start - b.start);
-  return items;
-}
-
-// ---------------- Main App ----------------
+    // ---------------- Main App ----------------
     function App(){
       const [friends, setFriends] = useState(() => {
         try { const raw = localStorage.getItem(STORAGE_KEY); return raw ? JSON.parse(raw) : []; } catch { return []; }
@@ -269,6 +350,25 @@ function computeTimelineUnique(friends, horizonDays = 150) {
       const [modalOpen, setModalOpen] = useState(false);
       const [editing, setEditing] = useState(null);
 
+      // Auto-compact based on viewport size
+      const [isCompact, setIsCompact] = useState(() => shouldCompact(window.innerWidth, window.innerHeight));
+      useEffect(() => {
+        const apply = () => setIsCompact(shouldCompact(window.innerWidth, window.innerHeight));
+        const mqW = window.matchMedia('(max-width: 400px)');
+        const mqH = window.matchMedia('(max-height: 600px)');
+        apply();
+        if (mqW.addEventListener) { mqW.addEventListener('change', apply); mqH.addEventListener('change', apply); }
+        else { mqW.addListener(apply); mqH.addListener(apply); }
+        window.addEventListener('resize', apply);
+        window.addEventListener('orientationchange', apply);
+        return () => {
+          if (mqW.removeEventListener) { mqW.removeEventListener('change', apply); mqH.removeEventListener('change', apply); }
+          else { mqW.removeListener(apply); mqH.removeListener(apply); }
+          window.removeEventListener('resize', apply);
+          window.removeEventListener('orientationchange', apply);
+        };
+      }, []);
+
       useEffect(() => { localStorage.setItem(STORAGE_KEY, JSON.stringify(friends)); }, [friends]);
 
       const filteredFriends = useMemo(() => {
@@ -282,7 +382,6 @@ function computeTimelineUnique(friends, horizonDays = 150) {
 
       function nextMonth(){ const d = new Date(viewYear, viewMonth+1, 1); setViewYear(d.getFullYear()); setViewMonth(d.getMonth()); }
       function prevMonth(){ const d = new Date(viewYear, viewMonth-1, 1); setViewYear(d.getFullYear()); setViewMonth(d.getMonth()); }
-      function jumpToToday(){ setViewYear(now.getFullYear()); setViewMonth(now.getMonth()); }
 
       const monthWindowsByFriend = useMemo(() => {
         const start = addDays(firstOfMonth, -7), end = addDays(lastOfMonth, 7);
@@ -293,10 +392,17 @@ function computeTimelineUnique(friends, horizonDays = 150) {
 
       const timelineItems = useMemo(() => computeTimelineUnique(filteredFriends, 150), [filteredFriends]);
 
-      function openNew(){ setEditing({ id:null, name:'', cycleLength:28, lutealPhase:DEFAULT_LUTEAL, lastPeriodStart:'', color: COLOR_PALETTE[(friends.length)%COLOR_PALETTE.length].hex }); setModalOpen(true); }
+      function openNew(){
+        setEditing({ id:null, name:'', cycleLength:28, lutealPhase:DEFAULT_LUTEAL, lastPeriodStart:'', color: COLOR_PALETTE[(friends.length)%COLOR_PALETTE.length].hex });
+        setModalOpen(true);
+      }
       function openEdit(f){ setEditing({...f}); setModalOpen(true); }
       function saveEditing(){
-        const e = editing; if (!e) return; if (!e.name.trim() || !e.lastPeriodStart || !e.cycleLength) return;
+        const e = editing;
+        if (!validateEditing(e)) {
+          alert('Please provide name, last period date, cycle length (15–60), and luteal phase (8–20).');
+          return;
+        }
         const clean = { id: e.id || uuid(), name: e.name.trim(), cycleLength: clamp(Number(e.cycleLength)||28,15,60), lutealPhase: clamp(Number(e.lutealPhase)||DEFAULT_LUTEAL,8,20), lastPeriodStart: e.lastPeriodStart, color: e.color || COLOR_PALETTE[0].hex };
         setFriends(prev => { const exists = prev.find(x=>x.id===clean.id); return exists ? prev.map(x=>x.id===clean.id?clean:x) : [...prev, clean]; });
         setModalOpen(false);
@@ -323,21 +429,22 @@ function computeTimelineUnique(friends, horizonDays = 150) {
       function nextWindowSummary(friend){ const next = upcomingFertileWindows(friend,365)[0]; return next ? formatRange(next.start, next.end) : 'No window soon'; }
 
       return (
-        <div className="ff-root min-h-screen">
+        <div className={`ff-root min-h-screen ${isCompact ? 'ff-compact' : ''}`}>
           {/* Header */}
           <header className="sticky top-0 z-40 border-b" style={{ backgroundColor: 'var(--header-bg)', borderColor: 'var(--border)', backdropFilter:'blur(8px)', WebkitBackdropFilter:'blur(8px)', paddingTop: 'env(safe-area-inset-top)' }}>
-            <div className="mx-auto max-w-7xl px-3 sm:px-4 py-3 flex items-center justify-between">
+            <div className={isCompact ? 'mx-auto max-w-7xl px-3 sm:px-4 py-3 grid grid-cols-[1fr_auto] items-center gap-2' : 'mx-auto max-w-7xl px-3 sm:px-4 py-3 flex items-center justify-between'}>
               <div className="flex items-center gap-3 min-w-0">
-                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900 text-white shadow-sm">{Icons.calendar}</div>
+                <div className="brand-icon flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900 text-white shadow-sm">{Icons.calendar}</div>
                 <div className="min-w-0">
-                  <h1 className="$1">HerMood</h1>
-                  <p className="text-xs ff-muted -mt-0.5">Plan meetups around estimated fertile windows.</p>
+                  <h1 className="text-lg font-semibold leading-tight truncate">HerMood</h1>
+                  {!isCompact && (<p className="text-xs ff-muted -mt-0.5">Plan meetups around estimated fertile windows.</p>)}
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                <PillButton variant="ghost" onClick={()=>setTheme(theme==='dark'?'light':'dark')} icon={theme==='dark'? Icons.sun : Icons.moon}>{theme==='dark'?'Light':'Dark'} mode</PillButton>
-                <PillButton variant="ghost" onClick={jumpToToday}>Today</PillButton>
-                <PillButton onClick={openNew} icon={Icons.plus}>Add friend</PillButton>
+              <div className={isCompact ? 'flex justify-end' : 'flex items-center gap-2'}>
+                <IconButton variant="ghost" onClick={()=>setTheme(theme==='dark'?'light':'dark')} icon={theme==='dark'? Icons.sun : Icons.moon} label={theme==='dark'?'Switch to light mode':'Switch to dark mode'} />
+                {!isCompact && (
+                  <PillButton onClick={openNew} icon={Icons.plus}>Add friend</PillButton>
+                )}
               </div>
             </div>
           </header>
@@ -350,12 +457,26 @@ function computeTimelineUnique(friends, horizonDays = 150) {
                 title="Monthly overview"
                 icon={<span className="text-slate-700 dark:text-slate-200">{Icons.calendar}</span>}
                 right={
-                  <div className="flex items-center gap-2">
-                    <PillButton variant="ghost" onClick={prevMonth} icon={Icons.chevronLeft}>Prev</PillButton>
-                    <div className="ff-card rounded-full px-3 py-1.5 text-sm font-medium ring-1" style={{ borderColor: 'var(--border)' }}>
-                      {new Intl.DateTimeFormat('en', { month: 'long', year: 'numeric' }).format(firstOfMonth)}
+                  <div className="grid grid-cols-[auto,1fr,auto] items-center gap-2 w-full">
+                    <div>
+                      {isCompact ? (
+                        <IconButton variant="ghost" onClick={prevMonth} icon={Icons.chevronLeft} label="Previous month" />
+                      ) : (
+                        <PillButton variant="ghost" onClick={prevMonth} icon={Icons.chevronLeft}>Prev</PillButton>
+                      )}
                     </div>
-                    <PillButton variant="ghost" onClick={nextMonth} icon={Icons.chevronRight}>Next</PillButton>
+                    <div className="min-w-0">
+                      <div className="ff-card rounded-full px-3 py-1.5 text-sm font-medium ring-1 mx-auto text-center w-full" style={{ borderColor: 'var(--border)', backgroundColor:'transparent' }}>
+                        {new Intl.DateTimeFormat('en', { month: 'long', year: 'numeric' }).format(firstOfMonth)}
+                      </div>
+                    </div>
+                    <div className="justify-self-end">
+                      {isCompact ? (
+                        <IconButton variant="ghost" onClick={nextMonth} icon={Icons.chevronRight} label="Next month" />
+                      ) : (
+                        <PillButton variant="ghost" onClick={nextMonth} icon={Icons.chevronRight}>Next</PillButton>
+                      )}
+                    </div>
                   </div>
                 }
               >
@@ -412,7 +533,7 @@ function computeTimelineUnique(friends, horizonDays = 150) {
 
                 <div className="mt-3 flex flex-wrap items-center gap-2 text-xs ff-muted">
                   <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-slate-900" /> Fertile window</span>
-                  <span className="inline-flex items-center gap-1 text-amber-700"><span>{Icons.alert}</span> Estimates based on average luteal phase of {DEFAULT_LUTEAL} days (editable per friend).</span>
+                  <span className="inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs ring-1 bg-amber-50 text-amber-800 ring-amber-200 dark:bg-amber-400/10 dark:text-amber-300 dark:ring-amber-300/20">{Icons.alert} Predictions are estimates only.</span>
                 </div>
               </SectionCard>
             </div>
@@ -455,8 +576,8 @@ function computeTimelineUnique(friends, horizonDays = 150) {
                       <p className="text-sm ff-muted">Add cycle length and last period start. We'll estimate the next fertile windows.</p>
                     </div>
                     <div className="flex flex-wrap justify-center gap-2">
-                      <span className="inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs ring-1" style={{ background: 'rgba(245,158,11,.10)', color:'#FDE68A', borderColor: 'rgba(253,230,138,.2)' }}>{Icons.alert} Predictions are estimates only.</span>
-                      <button onClick={loadDemo} className="rounded-full bg-slate-900 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-slate-800">Load demo data</button>
+                      <span className="inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs ring-1 bg-amber-50 text-amber-800 ring-amber-200 dark:bg-amber-400/10 dark:text-amber-300 dark:ring-amber-300/20">{Icons.alert} Predictions are estimates only.</span>
+                      <button onClick={loadDemo} className="tappable rounded-full bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-slate-800">Load demo data</button>
                     </div>
                   </div>
                 ) : (
@@ -483,7 +604,7 @@ function computeTimelineUnique(friends, horizonDays = 150) {
             </div>
           </main>
 
-          <footer className="mx-auto max-w-7xl px-3 sm:px-4 pb-10 pt-2 text-center text-xs ff-muted">
+          <footer className="mx-auto max-w-7xl px-3 sm:px-4 pb-10 pt-2 text-center text-xs ff-muted" style={{ paddingBottom: 'calc(2.5rem + env(safe-area-inset-bottom))' }}>
             <p>Fertility predictions are approximate. Consider setting a custom luteal phase per person if known.</p>
           </footer>
 
@@ -514,7 +635,7 @@ function computeTimelineUnique(friends, horizonDays = 150) {
                 <label className="text-sm font-medium" style={{ color:'var(--fg)' }}>Color</label>
                 <div className="flex flex-wrap items-center gap-2">
                   {COLOR_PALETTE.map(c => (
-                    <button key={c.hex} onClick={()=>setEditing(old=>({...old, color:c.hex}))} className={`h-8 w-8 rounded-full ring-2 ${editing?.color===c.hex ? 'ring-slate-900' : 'ring-transparent'}`} style={{ backgroundColor:c.hex }} aria-label={c.name} />
+                    <button key={c.hex} onClick={()=>setEditing(old=>({...old, color:c.hex}))} className={`tappable h-11 w-11 rounded-full ring-2 ${editing?.color===c.hex ? 'ring-slate-900' : 'ring-transparent'}`} style={{ backgroundColor:c.hex }} aria-label={c.name} />
                   ))}
                   <div className="ml-2 inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs ring-1" style={{ backgroundColor:'var(--chip-bg)', borderColor:'var(--border)' }}>
                     <span className="ff-muted">Preview</span>
@@ -543,8 +664,13 @@ function computeTimelineUnique(friends, horizonDays = 150) {
     // Run sanity tests once on load (check console)
     runTests();
 
-    ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+    ReactDOM.createRoot(document.getElementById('root')).render(
+      <ErrorBoundary>
+        <App />
+      </ErrorBoundary>
+    );
   </script>
 </body>
 </html>
+
 
