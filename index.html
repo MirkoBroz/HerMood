@@ -1,0 +1,534 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>HerMood</title>
+  <!-- Tailwind Play CDN (no build step) -->
+  <script>
+    window.tailwind = { config: { darkMode: 'class' } };
+  </script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- React 18 + Babel for in-browser JSX transform (no build step) -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    /* Theme variables so dark mode works even without Tailwind dark: variants */
+    :root {
+      --bg: #f8fafc;          /* light bg */
+      --card: #ffffff;         /* light card */
+      --fg: #0f172a;           /* slate-900 */
+      --muted: #475569;        /* slate-600 */
+      --border: #e2e8f0;       /* slate-200 */
+      --input-bg: #ffffff;
+      --chip-bg: rgba(15,23,42,.03);
+    }
+    .dark:root, html.dark {
+      --bg: #0B1220;           /* dark navy */
+      --card: #0F1A2B;         /* dark surface */
+      --fg: #E2E8F0;           /* text */
+      --muted: #94A3B8;        /* secondary text */
+      --border: #334155;       /* border */
+      --input-bg: #0B1220;     /* input bg */
+      --chip-bg: rgba(255,255,255,.06);
+    }
+    .ff-root { background-color: var(--bg); color: var(--fg); }
+    .ff-card { background-color: var(--card); border-color: var(--border); }
+    .ff-input { background-color: var(--input-bg); color: var(--fg); border-color: var(--border); }
+    .ff-muted { color: var(--muted); }
+    .ff-chip { background-color: var(--chip-bg); border-color: var(--border); }
+  </style>
+</head>
+<body class="min-h-screen">
+  <div id="root"></div>
+
+  <!-- Use Babel presets so JSX compiles properly -->
+  <script type="text/babel" data-presets="env,react">
+    const { useEffect, useMemo, useState } = React;
+
+    // ---------------- Utilities ----------------
+    const STORAGE_KEY = 'period-planner-friends-v1';
+    const THEME_KEY = 'fertile-friends-theme';
+    const DEFAULT_LUTEAL = 14; // days
+    const DAY = 24 * 60 * 60 * 1000;
+
+    const COLOR_PALETTE = [
+      { name: 'Rose', hex: '#f43f5e' },
+      { name: 'Indigo', hex: '#6366f1' },
+      { name: 'Emerald', hex: '#10b981' },
+      { name: 'Amber', hex: '#f59e0b' },
+      { name: 'Sky', hex: '#0ea5e9' },
+      { name: 'Violet', hex: '#8b5cf6' },
+      { name: 'Fuchsia', hex: '#d946ef' },
+      { name: 'Teal', hex: '#14b8a6' },
+    ];
+
+    function uuid(){
+      if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+      return 'id-' + Math.random().toString(36).slice(2,10);
+    }
+    function toMiddayLocal(d){ return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12,0,0,0); }
+    function parseISODateOnly(iso){
+      const [y,m,d] = (iso||'').split('-').map(Number);
+      if (!y||!m||!d) return null;
+      return new Date(y, m-1, d, 12,0,0,0);
+    }
+    function addDays(date, days){ return new Date(date.getTime() + days*DAY); }
+    function formatRange(start, end, opts={month:'short'}){
+      const sameMonth = start.getMonth()===end.getMonth() && start.getFullYear()===end.getFullYear();
+      const fmt = new Intl.DateTimeFormat('en', { month: opts.month });
+      const d1=start.getDate(), d2=end.getDate();
+      const y=end.getFullYear();
+      return sameMonth ? `${fmt.format(start)} ${d1}–${d2}, ${y}` : `${fmt.format(start)} ${d1} – ${fmt.format(end)} ${d2}, ${y}`;
+    }
+    function formatDate(d){ return new Intl.DateTimeFormat('en', { weekday: 'short', month:'short', day:'numeric' }).format(d); }
+    function clamp(n,min,max){ return Math.max(min, Math.min(max,n)); }
+
+    // Prediction helpers
+    function fertileWindowsInRange(friend, rangeStart, rangeEnd){
+      const { lastPeriodStart, cycleLength, lutealPhase = DEFAULT_LUTEAL } = friend || {};
+      if (!lastPeriodStart || !cycleLength) return [];
+      const startDate = parseISODateOnly(lastPeriodStart);
+      if (!startDate || isNaN(startDate)) return [];
+      const windows = [];
+      const msCycle = cycleLength * DAY;
+      const kStart = Math.floor((rangeStart.getTime() - startDate.getTime())/msCycle) - 1;
+      let periodStart = new Date(startDate.getTime() + Math.max(0,kStart)*msCycle);
+      for (let i=0;i<24;i++){
+        const nextPeriod = new Date(periodStart.getTime() + msCycle);
+        const ovulation = new Date(nextPeriod.getTime() - lutealPhase*DAY);
+        const fStart = addDays(ovulation,-5);
+        const fEnd = ovulation; // inclusive
+        if (fStart <= rangeEnd && fEnd >= rangeStart) windows.push({start:fStart, end:fEnd});
+        if (fStart > rangeEnd) break;
+        periodStart = nextPeriod;
+      }
+      return windows;
+    }
+    function upcomingFertileWindows(friend, horizonDays=120){
+      const today = toMiddayLocal(new Date());
+      const end = addDays(today, horizonDays);
+      return fertileWindowsInRange(friend, today, end).filter(w => w.end >= today);
+    }
+    function initials(name){
+      return (name||'')
+        .split(/\s+/)
+        .filter(Boolean)
+        .map(n => n[0]?.toUpperCase())
+        .slice(0,2)
+        .join('');
+    }
+
+    // ---------------- Icons (inline SVG) ----------------
+    const Icon = ({path, size=20, className=''}) => (
+      <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+        {path}
+      </svg>
+    );
+    const Icons = {
+      calendar: <Icon path={<><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></>} />,
+      plus: <Icon path={<><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></>} />,
+      edit: <Icon path={<><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></>} />,
+      trash: <Icon path={<><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></>} />,
+      chevronLeft: <Icon path={<polyline points="15 18 9 12 15 6"/>} />,
+      chevronRight: <Icon path={<polyline points="9 18 15 12 9 6"/>} />,
+      alert: <Icon path={<><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></>} />,
+      x: <Icon path={<line x1="18" y1="6" x2="6" y2="18"/>} />,
+      sun: <Icon path={<><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></>} />,
+      moon: <Icon path={<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>} />,
+    };
+
+    // ---------------- Reusable UI ----------------
+    const ColorDot = ({ hex, className='' }) => (
+      <span className={`inline-block h-2.5 w-2.5 rounded-full ring-2 ring-white ${className}`} style={{ backgroundColor: hex }} />
+    );
+
+    const PillButton = ({ children, onClick, variant='primary', icon=null }) => {
+      const base = 'inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-medium shadow-sm transition hover:shadow focus:outline-none';
+      const styles = {
+        primary: 'bg-slate-900 text-white hover:bg-slate-800',
+        ghost: 'bg-white text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50 dark:bg-transparent dark:text-slate-200 dark:ring-slate-700 dark:hover:bg-white/5',
+        danger: 'bg-rose-600 text-white hover:bg-rose-500',
+      };
+      return (
+        <button onClick={onClick} className={`${base} ${styles[variant]}`}>
+          {icon}
+          {children}
+        </button>
+      );
+    };
+
+    const SectionCard = ({ title, icon, children, right=null }) => (
+      <div className="ff-card rounded-2xl shadow-sm ring-1" style={{ borderColor: 'var(--border)' }}>
+        <div className="flex items-center justify-between px-4 py-3" style={{ borderBottom: '1px solid var(--border)' }}>
+          <div className="flex items-center gap-2" style={{ color: 'var(--fg)' }}>
+            {icon}
+            <h2 className="text-base font-semibold">{title}</h2>
+          </div>
+          {right}
+        </div>
+        <div className="p-4">{children}</div>
+      </div>
+    );
+
+    const Modal = ({ open, onClose, children }) => (
+      open ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+          <div className="ff-card relative z-10 w-full max-w-2xl rounded-2xl p-4 shadow-xl ring-1" style={{ borderColor: 'var(--border)' }}>
+            <div className="absolute right-3 top-3">
+              <button onClick={onClose} className="rounded-full p-1 text-slate-500 hover:bg-white/10">{Icons.x}</button>
+            </div>
+            {children}
+          </div>
+        </div>
+      ) : null
+    );
+
+    // ---------------- Tiny runtime tests (console) ----------------
+    function runTests(){
+      try {
+        console.group('HerMood – sanity tests');
+        console.assert(initials('Alex Smith') === 'AS', 'initials failed');
+        console.assert(clamp(100, 0, 10) === 10, 'clamp upper bound failed');
+        console.assert(clamp(-5, 0, 10) === 0, 'clamp lower bound failed');
+        const d = parseISODateOnly('2025-03-05');
+        console.assert(d && d.getFullYear()===2025 && d.getMonth()===2 && d.getDate()===5, 'parseISODateOnly failed');
+        const fr = formatRange(new Date(2025,2,1,12), new Date(2025,2,5,12));
+        console.assert(fr === 'Mar 1–5, 2025', 'formatRange failed: got %s', fr);
+        const friend = { lastPeriodStart: '2025-03-01', cycleLength: 28, lutealPhase: 14 };
+        const wins = fertileWindowsInRange(friend, new Date(2025,2,1,12), new Date(2025,2,31,12));
+        console.assert(Array.isArray(wins) && wins.length>0, 'fertileWindowsInRange returned empty');
+        const w0 = wins.find(w => w.start.getDate()===10 && w.end.getDate()===15);
+        console.assert(!!w0, 'expected window Mar 10–15 not found');
+        // timeline uniqueness & sort tests
+        const today2 = toMiddayLocal(new Date());
+        const iso2 = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+        const A = { id:'A', name:'A', cycleLength:28, lutealPhase:14, lastPeriodStart: iso2(addDays(today2,-21)), color:'#000' };
+        const B = { id:'B', name:'B', cycleLength:30, lutealPhase:14, lastPeriodStart: iso2(addDays(today2,-10)), color:'#000' };
+        const itemsU = computeTimelineUnique([A,B], 200);
+        const uniqueCount = new Set(itemsU.map(i=>i.friend.id)).size;
+        console.assert(itemsU.length === uniqueCount, 'computeTimelineUnique should return at most one entry per friend');
+        const sorted = itemsU.every((it, idx, arr)=> idx===0 || arr[idx-1].start <= it.start);
+        console.assert(sorted, 'Timeline items must be sorted by start date');
+        console.groupEnd();
+      } catch (e) {
+        console.error('Tests failed', e);
+      }
+    }
+
+    // ---------------- Timeline helper (one item per friend) ----------------
+function computeTimelineUnique(friends, horizonDays = 150) {
+  const items = [];
+  for (const f of friends) {
+    const next = upcomingFertileWindows(f, horizonDays)[0];
+    if (next) items.push({ friend: f, ...next });
+  }
+  items.sort((a,b)=>a.start - b.start);
+  return items;
+}
+
+// ---------------- Main App ----------------
+    function App(){
+      const [friends, setFriends] = useState(() => {
+        try { const raw = localStorage.getItem(STORAGE_KEY); return raw ? JSON.parse(raw) : []; } catch { return []; }
+      });
+
+      const [theme, setTheme] = useState(() => {
+        const saved = localStorage.getItem(THEME_KEY);
+        if (saved === 'dark' || saved === 'light') return saved;
+        return (window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+      });
+
+      useEffect(() => {
+        const root = document.documentElement;
+        if (theme === 'dark') root.classList.add('dark'); else root.classList.remove('dark');
+        localStorage.setItem(THEME_KEY, theme);
+      }, [theme]);
+
+      const now = toMiddayLocal(new Date());
+      const [viewYear, setViewYear] = useState(now.getFullYear());
+      const [viewMonth, setViewMonth] = useState(now.getMonth());
+      const [query, setQuery] = useState('');
+      const [modalOpen, setModalOpen] = useState(false);
+      const [editing, setEditing] = useState(null);
+
+      useEffect(() => { localStorage.setItem(STORAGE_KEY, JSON.stringify(friends)); }, [friends]);
+
+      const filteredFriends = useMemo(() => {
+        const q = query.trim().toLowerCase();
+        if (!q) return friends;
+        return friends.filter(f => (f.name||'').toLowerCase().includes(q));
+      }, [friends, query]);
+
+      const firstOfMonth = useMemo(() => new Date(viewYear, viewMonth, 1, 12,0,0,0), [viewYear, viewMonth]);
+      const lastOfMonth  = useMemo(() => new Date(viewYear, viewMonth+1, 0, 12,0,0,0), [viewYear, viewMonth]);
+
+      function nextMonth(){ const d = new Date(viewYear, viewMonth+1, 1); setViewYear(d.getFullYear()); setViewMonth(d.getMonth()); }
+      function prevMonth(){ const d = new Date(viewYear, viewMonth-1, 1); setViewYear(d.getFullYear()); setViewMonth(d.getMonth()); }
+      function jumpToToday(){ setViewYear(now.getFullYear()); setViewMonth(now.getMonth()); }
+
+      const monthWindowsByFriend = useMemo(() => {
+        const start = addDays(firstOfMonth, -7), end = addDays(lastOfMonth, 7);
+        const map = new Map();
+        for (const f of filteredFriends) map.set(f.id, fertileWindowsInRange(f, start, end));
+        return map;
+      }, [filteredFriends, firstOfMonth, lastOfMonth]);
+
+      const timelineItems = useMemo(() => computeTimelineUnique(filteredFriends, 150), [filteredFriends]);
+
+      function openNew(){ setEditing({ id:null, name:'', cycleLength:28, lutealPhase:DEFAULT_LUTEAL, lastPeriodStart:'', color: COLOR_PALETTE[(friends.length)%COLOR_PALETTE.length].hex }); setModalOpen(true); }
+      function openEdit(f){ setEditing({...f}); setModalOpen(true); }
+      function saveEditing(){
+        const e = editing; if (!e) return; if (!e.name.trim() || !e.lastPeriodStart || !e.cycleLength) return;
+        const clean = { id: e.id || uuid(), name: e.name.trim(), cycleLength: clamp(Number(e.cycleLength)||28,15,60), lutealPhase: clamp(Number(e.lutealPhase)||DEFAULT_LUTEAL,8,20), lastPeriodStart: e.lastPeriodStart, color: e.color || COLOR_PALETTE[0].hex };
+        setFriends(prev => { const exists = prev.find(x=>x.id===clean.id); return exists ? prev.map(x=>x.id===clean.id?clean:x) : [...prev, clean]; });
+        setModalOpen(false);
+      }
+      function removeFriend(id){ setFriends(prev => prev.filter(f => f.id !== id)); }
+
+      function loadDemo(){
+        const today = toMiddayLocal(new Date());
+        const iso = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+        const f1 = { id: uuid(), name:'Alex', cycleLength:28, lutealPhase:14, lastPeriodStart: iso(addDays(today,-21)), color: COLOR_PALETTE[0].hex };
+        const f2 = { id: uuid(), name:'Maya', cycleLength:30, lutealPhase:14, lastPeriodStart: iso(addDays(today,-10)), color: COLOR_PALETTE[1].hex };
+        const f3 = { id: uuid(), name:'Sam',  cycleLength:26, lutealPhase:14, lastPeriodStart: iso(addDays(today,-5)),  color: COLOR_PALETTE[2].hex };
+        setFriends([f1,f2,f3]);
+      }
+
+      const daysInMonth = lastOfMonth.getDate();
+      const firstDow = (firstOfMonth.getDay()+6)%7; // Monday=0 .. Sunday=6
+      const totalCells = Math.ceil((firstDow + daysInMonth)/7)*7;
+
+      function friendsActiveOn(date){
+        const list=[]; for (const f of filteredFriends){ const wins = monthWindowsByFriend.get(f.id)||[]; for (const w of wins){ if (date >= toMiddayLocal(w.start) && date <= toMiddayLocal(addDays(w.end,0))){ list.push(f); break; } } }
+        return list;
+      }
+      function nextWindowSummary(friend){ const next = upcomingFertileWindows(friend,365)[0]; return next ? formatRange(next.start, next.end) : 'No window soon'; }
+
+      return (
+        <div className="ff-root min-h-screen">
+          {/* Header */}
+          <header className="sticky top-0 z-40 border-b" style={{ backgroundColor: 'rgba(0,0,0,0)', borderColor: 'var(--border)', backdropFilter:'blur(8px)' }}>
+            <div className="mx-auto max-w-7xl px-3 sm:px-4 py-3 flex items-center justify-between">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900 text-white shadow-sm">{Icons.calendar}</div>
+                <div className="min-w-0">
+                  <h1 className="$1">HerMood</h1>
+                  <p className="text-xs ff-muted -mt-0.5">Plan meetups around estimated fertile windows.</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <PillButton variant="ghost" onClick={()=>setTheme(theme==='dark'?'light':'dark')} icon={theme==='dark'? Icons.sun : Icons.moon}>{theme==='dark'?'Light':'Dark'} mode</PillButton>
+                <PillButton variant="ghost" onClick={jumpToToday}>Today</PillButton>
+                <PillButton onClick={openNew} icon={Icons.plus}>Add friend</PillButton>
+              </div>
+            </div>
+          </header>
+
+          {/* Main */}
+          <main className="mx-auto max-w-7xl p-3 sm:p-4 grid gap-4 lg:grid-cols-3">
+            {/* Left: Calendar */}
+            <div className="lg:col-span-2 space-y-4">
+              <SectionCard
+                title="Monthly overview"
+                icon={<span className="text-slate-700 dark:text-slate-200">{Icons.calendar}</span>}
+                right={
+                  <div className="flex items-center gap-2">
+                    <PillButton variant="ghost" onClick={prevMonth} icon={Icons.chevronLeft}>Prev</PillButton>
+                    <div className="ff-card rounded-full px-3 py-1.5 text-sm font-medium ring-1" style={{ borderColor: 'var(--border)' }}>
+                      {new Intl.DateTimeFormat('en', { month: 'long', year: 'numeric' }).format(firstOfMonth)}
+                    </div>
+                    <PillButton variant="ghost" onClick={nextMonth} icon={Icons.chevronRight}>Next</PillButton>
+                  </div>
+                }
+              >
+                <div className="mb-3 flex flex-wrap items-center gap-2">
+                  {filteredFriends.length>0 ? (
+                    filteredFriends.map(f => (
+                      <span key={f.id} className="ff-chip inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs ring-1 shadow-sm">
+                        <ColorDot hex={f.color} />
+                        <span className="text-slate-700 dark:text-slate-200">{f.name}</span>
+                      </span>
+                    ))
+                  ) : (
+                    <span className="text-sm ff-muted">No friends yet. Click <em>Add friend</em> to begin.</span>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-7 text-xs font-medium ff-muted">
+                  {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(d => <div key={d} className="px-2 py-1 text-center">{d}</div>)}
+                </div>
+
+                <div className="grid grid-cols-7 gap-y-1 rounded-xl p-2" style={{ backgroundColor: 'var(--chip-bg)' }}>
+                  {Array.from({ length: totalCells }).map((_, idx) => {
+                    const dayNum = idx - firstDow + 1;
+                    const inMonth = dayNum>=1 && dayNum<=daysInMonth;
+                    const date = new Date(viewYear, viewMonth, clamp(dayNum,1,daysInMonth), 12,0,0,0);
+                    const active = inMonth ? friendsActiveOn(date) : [];
+                    const isToday = inMonth && date.toDateString()===now.toDateString();
+                    const style = { backgroundColor: inMonth ? 'var(--card)' : 'transparent', borderColor: 'var(--border)' };
+                    const classes = inMonth ? 'ff-card border p-1 rounded-lg min-h-[84px]' : 'border p-1 rounded-lg min-h-[84px]';
+
+                    return (
+                      <div key={idx} className={classes} style={style}>
+                        <div className="flex items-center justify-between px-1">
+                          <div className={`text-xs ${isToday ? 'font-bold' : 'ff-muted'}`}>{inMonth ? dayNum : ''}</div>
+                          {isToday && inMonth && (
+                            <span className="rounded-full bg-slate-900 px-2 py-0.5 text-[10px] font-medium text-white">Today</span>
+                          )}
+                        </div>
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {active.slice(0,6).map(f => (
+                            <span key={f.id} className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] ring-1" style={{ backgroundColor: 'var(--chip-bg)', borderColor: 'var(--border)' }}>
+                              <ColorDot hex={f.color} />
+                              <span className="text-slate-700 dark:text-slate-200">{initials(f.name)}</span>
+                            </span>
+                          ))}
+                          {active.length>6 && (
+                            <span className="rounded-full px-1.5 py-0.5 text-[10px] ring-1" style={{ backgroundColor: 'var(--chip-bg)', borderColor: 'var(--border)' }}>+{active.length-6}</span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="mt-3 flex flex-wrap items-center gap-2 text-xs ff-muted">
+                  <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-slate-900" /> Fertile window</span>
+                  <span className="inline-flex items-center gap-1 text-amber-700"><span>{Icons.alert}</span> Estimates based on average luteal phase of {DEFAULT_LUTEAL} days (editable per friend).</span>
+                </div>
+              </SectionCard>
+            </div>
+
+            {/* Right: Timeline + People */}
+            <div className="space-y-4">
+              <SectionCard title="Upcoming fertile windows" icon={<span className="text-slate-700 dark:text-slate-200">{Icons.calendar}</span>}>
+                {timelineItems.length===0 ? (
+                  <p className="text-sm ff-muted">Nothing in the next few months. Once you add friends, their next windows will appear here.</p>
+                ) : (
+                  <ul className="space-y-2">
+                    {timelineItems.map((item, idx) => (
+                      <li key={idx} className="ff-card flex items-center justify-between rounded-xl p-3 ring-1" style={{ borderColor:'var(--border)' }}>
+                        <div className="flex min-w-0 items-center gap-3">
+                          <span className="inline-flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold text-white" style={{ backgroundColor: item.friend.color }}>{initials(item.friend.name)}</span>
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-semibold" style={{ color:'var(--fg)' }}>{item.friend.name}</div>
+                            <div className="text-xs ff-muted">{formatRange(item.start,item.end)}</div>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-xs ff-muted">Starts in</div>
+                          <div className="text-sm font-semibold" style={{ color:'var(--fg)' }}>{Math.max(0, Math.round((item.start - now)/DAY))} days</div>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </SectionCard>
+
+              <SectionCard title="People" icon={<span className="text-slate-700 dark:text-slate-200">{Icons.calendar}</span>} right={<PillButton onClick={openNew} icon={Icons.plus}>Add</PillButton>}>
+                <div className="mb-3 flex items-center gap-2">
+                  <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search names..." className="ff-input w-full rounded-xl border px-3 py-2 text-sm outline-none" />
+                </div>
+                {friends.length===0 ? (
+                  <div className="ff-card flex flex-col items-center justify-center gap-4 rounded-2xl border border-dashed p-10 text-center" style={{ borderColor:'var(--border)' }}>
+                    <div className="rounded-full p-4" style={{ backgroundColor:'var(--chip-bg)' }}>{Icons.calendar}</div>
+                    <div className="space-y-1">
+                      <h3 className="text-lg font-semibold" style={{ color:'var(--fg)' }}>Start by adding your friends</h3>
+                      <p className="text-sm ff-muted">Add cycle length and last period start. We'll estimate the next fertile windows.</p>
+                    </div>
+                    <div className="flex flex-wrap justify-center gap-2">
+                      <span className="inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs ring-1" style={{ background: 'rgba(245,158,11,.10)', color:'#FDE68A', borderColor: 'rgba(253,230,138,.2)' }}>{Icons.alert} Predictions are estimates only.</span>
+                      <button onClick={loadDemo} className="rounded-full bg-slate-900 px-3 py-1.5 text-sm font-medium text-white shadow-sm hover:bg-slate-800">Load demo data</button>
+                    </div>
+                  </div>
+                ) : (
+                  <ul className="space-y-2">
+                    {filteredFriends.map(f => (
+                      <li key={f.id} className="ff-card flex items-center justify-between rounded-xl p-3 ring-1" style={{ borderColor:'var(--border)' }}>
+                        <div className="flex min-w-0 items-center gap-3">
+                          <span className="inline-flex h-9 w-9 items-center justify-center rounded-full text-sm font-bold text-white" style={{ backgroundColor: f.color }}>{initials(f.name)}</span>
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-semibold" style={{ color:'var(--fg)' }}>{f.name}</div>
+                            <div className="text-xs ff-muted">Next window: {nextWindowSummary(f)}</div>
+                            <div className="text-[11px] ff-muted">Cycle: ~{f.cycleLength}d · Luteal: {f.lutealPhase||DEFAULT_LUTEAL}d · Last period: {formatDate(parseISODateOnly(f.lastPeriodStart))}</div>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <PillButton variant="ghost" onClick={()=>openEdit(f)} icon={Icons.edit}>Edit</PillButton>
+                          <PillButton variant="danger" onClick={()=>removeFriend(f.id)} icon={Icons.trash}>Delete</PillButton>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </SectionCard>
+            </div>
+          </main>
+
+          <footer className="mx-auto max-w-7xl px-3 sm:px-4 pb-10 pt-2 text-center text-xs ff-muted">
+            <p>Fertility predictions are approximate. Consider setting a custom luteal phase per person if known.</p>
+          </footer>
+
+          {/* Modal: Add/Edit */}
+          <Modal open={modalOpen} onClose={()=>setModalOpen(false)}>
+            <h3 className="mb-3 text-lg font-semibold" style={{ color:'var(--fg)' }}>{editing?.id ? 'Edit person' : 'Add person'}</h3>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium" style={{ color:'var(--fg)' }}>Name</label>
+                <input value={editing?.name||''} onChange={e=>setEditing(old=>({...old, name:e.target.value}))} placeholder="e.g., Alex" className="ff-input w-full rounded-xl border px-3 py-2 text-sm outline-none" />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium" style={{ color:'var(--fg)' }}>Last period start</label>
+                <input type="date" value={editing?.lastPeriodStart||''} onChange={e=>setEditing(old=>({...old, lastPeriodStart:e.target.value}))} className="ff-input w-full rounded-xl border px-3 py-2 text-sm outline-none" />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium" style={{ color:'var(--fg)' }}>Average cycle length (days)</label>
+                <input type="number" min="15" max="60" value={editing?.cycleLength||28} onChange={e=>setEditing(old=>({...old, cycleLength:e.target.value}))} className="ff-input w-full rounded-xl border px-3 py-2 text-sm outline-none" />
+              </div>
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-sm font-medium" style={{ color:'var(--fg)' }}>Luteal phase (days)</label>
+                  <span className="text-[11px] ff-muted">Typically ~14d</span>
+                </div>
+                <input type="number" min="8" max="20" value={editing?.lutealPhase ?? DEFAULT_LUTEAL} onChange={e=>setEditing(old=>({...old, lutealPhase:e.target.value}))} className="ff-input w-full rounded-xl border px-3 py-2 text-sm outline-none" />
+              </div>
+              <div className="space-y-1.5 md:col-span-2">
+                <label className="text-sm font-medium" style={{ color:'var(--fg)' }}>Color</label>
+                <div className="flex flex-wrap items-center gap-2">
+                  {COLOR_PALETTE.map(c => (
+                    <button key={c.hex} onClick={()=>setEditing(old=>({...old, color:c.hex}))} className={`h-8 w-8 rounded-full ring-2 ${editing?.color===c.hex ? 'ring-slate-900' : 'ring-transparent'}`} style={{ backgroundColor:c.hex }} aria-label={c.name} />
+                  ))}
+                  <div className="ml-2 inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs ring-1" style={{ backgroundColor:'var(--chip-bg)', borderColor:'var(--border)' }}>
+                    <span className="ff-muted">Preview</span>
+                    <span className="inline-flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-bold text-white" style={{ backgroundColor: editing?.color || '#111827' }}>{initials(editing?.name||'?')}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="mt-4 flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div className="text-[11px] ff-muted">We store everything locally on your device. You can edit later at any time.</div>
+              <div className="flex items-center gap-2 self-end">
+                <PillButton variant="ghost" onClick={()=>setModalOpen(false)}>Cancel</PillButton>
+                <PillButton onClick={saveEditing}>Save</PillButton>
+              </div>
+            </div>
+          </Modal>
+
+          {/* Floating Add button for small screens */}
+          <button onClick={openNew} className="fixed bottom-5 right-5 rounded-full p-3 shadow-lg text-white md:hidden" style={{ backgroundColor:'#0ea5e9' }} aria-label="Add friend">
+            {Icons.plus}
+          </button>
+        </div>
+      );
+    }
+
+    // Run sanity tests once on load (check console)
+    runTests();
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+  </script>
+</body>
+</html>
