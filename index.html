@@ -161,6 +161,8 @@
       const end = addDays(today, horizonDays);
       return fertileWindowsInRange(friend, today, end).filter(w => w.end >= today);
     }
+    function dateKey(d){ const dt=toMiddayLocal(d); const y=dt.getFullYear(); const m=String(dt.getMonth()+1).padStart(2,'0'); const da=String(dt.getDate()).padStart(2,'0'); return `${y}-${m}-${da}`; }
+    function predictedPeriodStartsInRange(friend, rangeStart, rangeEnd){ const { lastPeriodStart, cycleLength } = friend || {}; if(!lastPeriodStart || !cycleLength) return []; const startDate = parseISODateOnly(lastPeriodStart); if(!startDate || isNaN(startDate)) return []; const arr=[]; const ms = cycleLength*DAY; const kStart = Math.floor((rangeStart.getTime()-startDate.getTime())/ms) - 1; let cur = new Date(startDate.getTime() + Math.max(0,kStart)*ms); for(let i=0;i<36;i++){ if(cur > rangeEnd) break; if(cur >= rangeStart) arr.push(toMiddayLocal(cur)); cur = new Date(cur.getTime()+ms);} return arr; }
     function initials(name){
       return (name||'')
         .split(/\s+/)
@@ -188,6 +190,15 @@
       sun: <Icon path={<><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></>} />,
       moon: <Icon path={<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>} />,
     };
+
+    // Additional icons and small droplet
+    const IconSparkles = <Icon path={<><path d="M12 2l1.5 3.5L17 7l-3.5 1.5L12 12l-1.5-3.5L7 7l3.5-1.5L12 2z"/><path d="M5 12l1 2 2 1-2 1-1 2-1-2-2-1 2-1 1-2z"/><path d="M18 14l.8 1.8L20.5 17l-1.7.8L18 19.5l-.8-1.7L15.5 17l1.7-.8L18 14z"/></>} />;
+    const IconUsers = <Icon path={<><circle cx="9" cy="8" r="3"/><circle cx="15" cy="10" r="3"/><path d="M2 20c0-3 4-5 7-5"/><path d="M10 20c0-3 4-5 7-5"/></>} />;
+    const DropletIcon = ({ size=12, color }) => (
+      <svg viewBox="0 0 24 24" width={size} height={size} style={{ color }}>
+        <path d="M12 2 C8 8,6 10,6 14 a6 6 0 0 0 12 0 C18 10,16 8,12 2 z" fill="currentColor" />
+      </svg>
+    );
 
     // Compact breakpoint helper (trigger at <= 400 px width or <= 600 px height)
     function shouldCompact(w, h){ return (w <= 400) || (h <= 600); }
@@ -300,6 +311,8 @@
         const friend = { lastPeriodStart: '2025-03-01', cycleLength: 28, lutealPhase: 14 };
         const wins = fertileWindowsInRange(friend, new Date(2025,2,1,12), new Date(2025,2,31,12));
         console.assert(Array.isArray(wins) && wins.length>0, 'fertileWindowsInRange returned empty');
+        const starts = predictedPeriodStartsInRange(friend, new Date(2025,2,1,12), new Date(2025,2,31,12));
+        console.assert(starts.some(d => d.getDate()===29), 'predictedPeriodStartsInRange should include Mar 29 for 28d cycle starting Mar 1');
         console.assert(Array.isArray(fertileWindowsInRange({}, new Date(), addDays(new Date(), 30))) && fertileWindowsInRange({}, new Date(), addDays(new Date(), 30)).length===0, 'fertileWindowsInRange should be empty for missing data');
         const today2 = toMiddayLocal(new Date());
         const iso2 = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
@@ -390,6 +403,17 @@
         return map;
       }, [filteredFriends, firstOfMonth, lastOfMonth]);
 
+      const monthPeriodStartKeysByFriend = useMemo(() => {
+        const start = addDays(firstOfMonth, -7), end = addDays(lastOfMonth, 7);
+        const map = new Map();
+        for (const f of filteredFriends){
+          const arr = predictedPeriodStartsInRange(f, start, end);
+          const set = new Set(arr.map(d => dateKey(d)));
+          map.set(f.id, set);
+        }
+        return map;
+      }, [filteredFriends, firstOfMonth, lastOfMonth]);
+
       const timelineItems = useMemo(() => computeTimelineUnique(filteredFriends, 150), [filteredFriends]);
 
       function openNew(){
@@ -434,7 +458,7 @@
           <header className="sticky top-0 z-40 border-b" style={{ backgroundColor: 'var(--header-bg)', borderColor: 'var(--border)', backdropFilter:'blur(8px)', WebkitBackdropFilter:'blur(8px)', paddingTop: 'env(safe-area-inset-top)' }}>
             <div className={isCompact ? 'mx-auto max-w-7xl px-3 sm:px-4 py-3 grid grid-cols-[1fr_auto] items-center gap-2' : 'mx-auto max-w-7xl px-3 sm:px-4 py-3 flex items-center justify-between'}>
               <div className="flex items-center gap-3 min-w-0">
-                <div className="brand-icon flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900 text-white shadow-sm">{Icons.calendar}</div>
+                
                 <div className="min-w-0">
                   <h1 className="text-lg font-semibold leading-tight truncate">HerMood</h1>
                   {!isCompact && (<p className="text-xs ff-muted -mt-0.5">Plan meetups around estimated fertile windows.</p>)}
@@ -503,6 +527,7 @@
                     const inMonth = dayNum>=1 && dayNum<=daysInMonth;
                     const date = new Date(viewYear, viewMonth, clamp(dayNum,1,daysInMonth), 12,0,0,0);
                     const active = inMonth ? friendsActiveOn(date) : [];
+                    const periodFriends = inMonth ? filteredFriends.filter(f => { const set = monthPeriodStartKeysByFriend.get(f.id); return set && set.has(dateKey(date)); }) : [];
                     const isToday = inMonth && date.toDateString()===now.toDateString();
                     const style = { backgroundColor: inMonth ? 'var(--card)' : 'transparent', borderColor: 'var(--border)' };
                     const classes = inMonth ? 'ff-card border p-1 rounded-lg min-h-[84px]' : 'border p-1 rounded-lg min-h-[84px]';
@@ -515,7 +540,17 @@
                             <span className="rounded-full bg-slate-900 px-2 py-0.5 text-[10px] font-medium text-white">Today</span>
                           )}
                         </div>
-                        <div className="mt-1 flex flex-wrap gap-1">
+                        {periodFriends.length>0 && (
+                            <div className="mt-1 flex flex-wrap gap-1 items-center">
+                              {periodFriends.slice(0,8).map(f => (
+                                <span key={f.id} title={`${f.name}: period starts`}>
+                                  {<DropletIcon size={12} color={f.color} />}
+                                </span>
+                              ))}
+                              {periodFriends.length>8 && (<span className="text-[10px] ff-muted">+{periodFriends.length-8}</span>)}
+                            </div>
+                          )}
+                          <div className="mt-1 flex flex-wrap gap-1">
                           {active.slice(0,6).map(f => (
                             <span key={f.id} className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] ring-1" style={{ backgroundColor: 'var(--chip-bg)', borderColor: 'var(--border)' }}>
                               <ColorDot hex={f.color} />
@@ -540,7 +575,7 @@
 
             {/* Right: Timeline + People */}
             <div className="space-y-4">
-              <SectionCard title="Upcoming fertile windows" icon={<span className="text-slate-700 dark:text-slate-200">{Icons.calendar}</span>}>
+              <SectionCard title="Upcoming fertile windows" icon={<span className="text-slate-700 dark:text-slate-200">{IconSparkles}</span>}>
                 {timelineItems.length===0 ? (
                   <p className="text-sm ff-muted">Nothing in the next few months. Once you add friends, their next windows will appear here.</p>
                 ) : (
@@ -564,7 +599,7 @@
                 )}
               </SectionCard>
 
-              <SectionCard title="People" icon={<span className="text-slate-700 dark:text-slate-200">{Icons.calendar}</span>} right={<PillButton onClick={openNew} icon={Icons.plus}>Add</PillButton>}>
+              <SectionCard title="People" icon={<span className="text-slate-700 dark:text-slate-200">{IconUsers}</span>} right={<PillButton onClick={openNew} icon={Icons.plus}>Add</PillButton>}>
                 <div className="mb-3 flex items-center gap-2">
                   <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search names..." className="ff-input w-full rounded-xl border px-3 h-11 text-sm outline-none" />
                 </div>
