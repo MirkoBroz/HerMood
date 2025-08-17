@@ -49,5 +49,4 @@ MIT License – feel free to use, modify, and share.
 
 ---
 
-**Author:** Mirko Broz  
-**Demo:** https://mirkobroz.github.io/HerMood/
+**Demo:** https://titonatural.github.io/HerMood/
